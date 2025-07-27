@@ -13,5 +13,7 @@ Inside workspace folder
 ```colcon build --packages-select dwa_planner_bd```
 
 ```ros2 run dwa_planner_bd dwa_planner```
+
+```ros2 launch dwa_planner_bd dwa_planner_launch.py```
 ### Author
 Bhavya Dalal
