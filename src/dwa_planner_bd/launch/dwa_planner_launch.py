@@ -3,6 +3,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import SetEnvironmentVariable
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -19,6 +20,10 @@ def generate_launch_description():
     # Define the world file path.
     world_file_path = os.path.join(pkg_turtlebot3_gazebo, 'worlds', 'turtlebot3_world.world')
 
+    set_turtlebot_model_env_var = SetEnvironmentVariable(
+        'TURTLEBOT3_MODEL', 'burger'
+    )
+
     # Define the node to launch.
     node_dwa = Node(
         package='dwa_planner_bd',
@@ -33,12 +38,37 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_gazebo_ros, 'launch', 'gazebo.launch.py')
         ),
-        # Pass the world file to Gazebo.
         launch_arguments={'world': world_file_path}.items()
     )
     
-    
+    # state publisher for robot
+    launch_robot_state_publisher = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_turtlebot3_gazebo, 'launch', 'robot_state_publisher.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': 'true'
+        }.items()
+    )
+
+    # spawn turtlebot3 in gazebo
+    spawn_turtlebot_node = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=[
+            '-entity', 'turtlebot3_burger',
+            '-file', os.path.join(pkg_turtlebot3_gazebo, 'models', 'turtlebot3_burger', 'model.sdf'),
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.3'
+        ],
+        output='screen'
+    )
+
+    ld.add_action(set_turtlebot_model_env_var)
     ld.add_action(launch_gazebo)
+    ld.add_action(launch_robot_state_publisher)
+    ld.add_action(spawn_turtlebot_node)
     ld.add_action(node_dwa)
 
     return ld

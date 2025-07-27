@@ -15,5 +15,7 @@ Inside workspace folder
 ```ros2 run dwa_planner_bd dwa_planner```
 
 ```ros2 launch dwa_planner_bd dwa_planner_launch.py```
+
+Add ```source /usr/share/gazebo/setup.sh``` in ```~/.bashrc```
 ### Author
 Bhavya Dalal
