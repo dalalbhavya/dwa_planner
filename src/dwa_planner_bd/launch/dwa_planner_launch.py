@@ -33,7 +33,9 @@ def generate_launch_description():
         executable='dwa_planner',
         output='screen',
         emulate_tty=True,
-        parameters=[]
+        parameters=[
+            {'use_sim_time': True}
+        ]
     )
 
     # launch gazebo node
