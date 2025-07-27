@@ -4,7 +4,7 @@ package_name = 'dwa_planner_bd'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.0.1',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -13,9 +13,9 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='dalal',
+    maintainer='Bhavya Dalal',
     maintainer_email='dalalbhavya@gmail.com',
-    description='TODO: Package description',
+    description='TODO: [Refine] Custom DWA Planner for mobile robots',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
