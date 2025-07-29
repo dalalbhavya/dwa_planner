@@ -30,10 +30,25 @@ class DWAPlanner(Node):
         self.yaw_rate_resolution = 0.1
         self.dt = 0.1
         self.predict_time = 3.0
-        self.to_goal_cost_gain = 1.0
-        self.speed_cost_gain = 1.0
-        self.obstacle_cost_gain = 1.5
         self.robot_radius = 0.2
+        
+        # Normal Cost Function Gains
+        self.to_goal_cost_gain = 0.8
+        self.path_cost_gain = 0.8
+        self.obstacle_cost_gain = 1
+        self.speed_cost_gain = 6
+
+        # Stuck/Recovery Cost Function Gains
+        self.recovery_to_goal_cost_gain = 0.2  # Drastically reduced to allow turning
+        self.recovery_path_cost_gain = 0.4
+        self.recovery_obstacle_cost_gain = 5.0 # Drastically increased to force obstacle avoidance
+        self.recovery_speed_cost_gain = 1.0
+
+        # Stuck Detection Parameters
+        self.stuck_counter = 0
+        self.stuck_threshold = 30  # 3 seconds at 10Hz
+        self.stuck_velocity_threshold = 0.01
+        self.is_stuck = False
 
         # State Variables
         self.current_pose = None
@@ -42,11 +57,7 @@ class DWAPlanner(Node):
         self.laser_scan = None
         
         # ROS2 Communications
-        qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        qos_profile = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, qos_profile)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, qos_profile)
@@ -66,7 +77,26 @@ class DWAPlanner(Node):
     def goal_callback(self, msg):
         self.goal_pose = msg.pose
         self.get_logger().info(f"New goal received: x={self.goal_pose.position.x}, y={self.goal_pose.position.y}")
+        # Reset stuck status on new goal
+        self.is_stuck = False
+        self.stuck_counter = 0
 
+    def check_if_stuck(self):
+        """Checks if the robot is stuck and updates the recovery state."""
+        if self.current_velocity.linear.x < self.stuck_velocity_threshold and self.current_velocity.angular.z < self.stuck_velocity_threshold:
+            self.stuck_counter += 1
+        else:
+            # If we are moving, reset the counter and exit recovery mode
+            self.stuck_counter = 0
+            if self.is_stuck:
+                self.get_logger().info("Robot is moving again, exiting recovery mode.")
+                self.is_stuck = False
+
+        if self.stuck_counter > self.stuck_threshold:
+            if not self.is_stuck:
+                self.get_logger().warn("Robot is stuck! Entering recovery mode.")
+                self.is_stuck = True
+    
     def plan_and_execute(self):
         if self.current_pose is None or self.goal_pose is None or self.laser_scan is None:
             return
@@ -83,12 +113,18 @@ class DWAPlanner(Node):
             self.stop_robot()
             self.goal_pose = None
             return
+        
+        # Check for stuck condition before planning
+        self.check_if_stuck()
             
         best_vel = self.dwa_control()
         
         if best_vel is None:
-            self.get_logger().error("No valid trajectory found! Stopping robot.")
-            self.stop_robot()
+            self.get_logger().error("No valid trajectory found! Forcing rotation to find a path.")
+            # If no path is found, force a rotation to hopefully find a clear path
+            cmd_vel = Twist()
+            cmd_vel.angular.z = 0.5
+            self.cmd_vel_pub.publish(cmd_vel)
         else:
             cmd_vel = Twist()
             cmd_vel.linear.x = best_vel[0]
@@ -115,18 +151,34 @@ class DWAPlanner(Node):
         best_traj = None
         min_cost = float('inf')
 
+        # Select gains based on whether we are in recovery mode
+        if self.is_stuck:
+            current_goal_gain = self.recovery_to_goal_cost_gain
+            current_path_gain = self.recovery_path_cost_gain
+            current_obs_gain = self.recovery_obstacle_cost_gain
+            current_speed_gain = self.recovery_speed_cost_gain
+        else:
+            current_goal_gain = self.to_goal_cost_gain
+            current_path_gain = self.path_cost_gain
+            current_obs_gain = self.obstacle_cost_gain
+            current_speed_gain = self.speed_cost_gain
+
         for v, w, trajectory in trajectories:
-            heading_cost = self.to_goal_cost_gain * self.calculate_heading_cost(trajectory)
-            dist_cost = self.obstacle_cost_gain * self.calculate_dist_cost(trajectory)
-            speed_cost = self.speed_cost_gain * (self.max_speed - v)
-            total_cost = heading_cost + dist_cost + speed_cost
+            heading_cost = current_goal_gain * self.calculate_heading_cost(trajectory)
+            path_cost = current_path_gain * self.calculate_path_cost(trajectory)
+            dist_cost = current_obs_gain * self.calculate_dist_cost(trajectory)
+            speed_cost = current_speed_gain * (self.max_speed - v)
+            
+            total_cost = heading_cost + path_cost + dist_cost + speed_cost
             
             if min_cost > total_cost:
                 min_cost = total_cost
                 best_traj = (v, w, trajectory)
+                self.get_logger().info(f"New best trajectory v:{best_traj[0]}, w:{best_traj[1]}")
+                self.get_logger().info(f"Costs - Heading: {heading_cost}, Path: {path_cost}, Dist: {dist_cost}, Speed: {speed_cost}")
 
         self.visualize_trajectories(trajectories, best_traj)
-        return best_traj[0], best_traj[1] if best_traj else None
+        return (best_traj[0], best_traj[1]) if best_traj else None
 
     def calculate_dynamic_window(self):
         v = self.current_velocity.linear.x
@@ -157,44 +209,51 @@ class DWAPlanner(Node):
         cost = abs(math.atan2(math.sin(angle_to_goal_local - final_theta), math.cos(angle_to_goal_local - final_theta)))
         return cost
 
+    def calculate_path_cost(self, trajectory):
+        dx = self.goal_pose.position.x - self.current_pose.position.x
+        dy = self.goal_pose.position.y - self.current_pose.position.y
+        _, _, current_yaw = quat2euler([self.current_pose.orientation.w, self.current_pose.orientation.x, self.current_pose.orientation.y, self.current_pose.orientation.z])
+        goal_x_local = dx * math.cos(-current_yaw) - dy * math.sin(-current_yaw)
+        goal_y_local = dx * math.sin(-current_yaw) + dy * math.cos(-current_yaw)
+        traj_x, traj_y, _ = trajectory[-1]
+        numerator = abs(goal_y_local * traj_x - goal_x_local * traj_y)
+        denominator = math.hypot(goal_x_local, goal_y_local)
+        return 0.0 if denominator < 0.01 else numerator / denominator
+
     def calculate_dist_cost(self, trajectory):
-        """
-        Calculates a more robust cost related to obstacle clearance.
-        This version filters invalid laser scan data and is more efficient.
-        """
         min_dist_to_obstacle = float('inf')
-        
-        # Pre-calculate obstacle points from the laser scan to avoid redundant calculations.
         obstacle_points = []
         for i, scan_dist in enumerate(self.laser_scan.ranges):
-            # Filter out invalid range values (inf, nan) which can cause errors.
             if np.isinf(scan_dist) or np.isnan(scan_dist):
                 continue
-            
+            if scan_dist < 0.2:  # Ignore very close obstacles
+                continue
             scan_angle = self.laser_scan.angle_min + i * self.laser_scan.angle_increment
             ox = scan_dist * math.cos(scan_angle)
             oy = scan_dist * math.sin(scan_angle)
             obstacle_points.append((ox, oy))
 
-        # If there are no valid obstacles, the cost is zero.
         if not obstacle_points:
             return 0.0
 
-        # Check each point in the trajectory against the list of obstacles.
         for traj_x, traj_y, _ in trajectory:
             for obs_x, obs_y in obstacle_points:
                 dist = math.hypot(traj_x - obs_x, traj_y - obs_y)
                 if dist < min_dist_to_obstacle:
                     min_dist_to_obstacle = dist
 
-        # If the closest the trajectory ever gets to an obstacle is less than the robot's radius,
-        # it's a collision, so the cost is infinite.
         if min_dist_to_obstacle <= self.robot_radius:
-            return float('inf')
-            
-        # The cost is inversely proportional to the distance to the closest obstacle.
-        return 1.0 / min_dist_to_obstacle
+            return float('inf') # Collision is infinite cost
 
+        safe_distance = 1.0 # Obstacles beyond this distance have zero cost
+        if min_dist_to_obstacle > safe_distance:
+            return 0.0
+        
+        # Linearly scale the cost from a max value down to 0
+        max_cost = 10.0 # The cost when an obstacle is at robot_radius
+        cost = (safe_distance - min_dist_to_obstacle) / (safe_distance - self.robot_radius) * max_cost
+        return cost
+            
     def visualize_trajectories(self, trajectories, best_traj):
         marker_array = MarkerArray()
         delete_marker = Marker()
