@@ -8,7 +8,7 @@ A from-scratch implementation of the Dynamic Window Approach (DWA) local planner
 
 ### 1. Prerequisites
 
-* ROS2 Humble, Gazebo, and TurtleBot3 packages installed.
+* ROS2 Humble, Gazebo, and a sourced ROS 2 environment.
 
 * Ensure your Gazebo environment is correctly sourced. Add the following line to your `~/.bashrc` file if you haven't already:
 
@@ -17,16 +17,37 @@ A from-scratch implementation of the Dynamic Window Approach (DWA) local planner
   
   ```
 
-### 2. Build the Package
+### 2. Install Dependencies
 
-Navigate to your ROS2 workspace root (e.g., `~/ros2_ws`) and run the build command:
+Before building, you need to install the required ROS and Python dependencies.
+
+**ROS Packages:**
+From the root of your workspace (e.g., `~/ros2_ws`), run `rosdep` to install all the ROS packages listed in `package.xml`:
+
+```
+sudo apt-get update
+rosdep install -i --from-path src -y --rosdistro humble
+
+```
+
+**Python Libraries:**
+Install the required Python libraries using `pip` and the `requirements.txt` file:
+
+```
+pip install -r src/dwa_planner_bd/requirements.txt
+
+```
+
+### 3. Build the Package
+
+Navigate to your ROS2 workspace root and run the build command:
 
 ```
 colcon build --packages-select dwa_planner_bd
 
 ```
 
-### 3. Launch the Simulation
+### 4. Launch the Simulation
 
 In a new terminal, source your workspace and run the launch file:
 
@@ -39,7 +60,7 @@ ros2 launch dwa_planner_bd dwa_planner_bd_launch.py
 
 ```
 
-### 4. Run the Planner
+### 5. Run the Planner
 
 * Once Gazebo and RViz have loaded, use the **"Nav2 Goal"** tool in the RViz toolbar to set a destination for the robot.
 
