@@ -11,6 +11,10 @@ import math
 from transforms3d.euler import quat2euler
 import tf2_ros
 from tf2_ros import TransformException
+import matplotlib.pyplot as plt
+import matplotlib
+
+matplotlib.use('TkAgg')
 
 class DWAPlanner(Node):
     def __init__(self):
@@ -39,9 +43,9 @@ class DWAPlanner(Node):
         self.speed_cost_gain = 6
 
         # Stuck/Recovery Cost Function Gains
-        self.recovery_to_goal_cost_gain = 0.2  # Drastically reduced to allow turning
+        self.recovery_to_goal_cost_gain = 0.2  # Reduced to allow turning
         self.recovery_path_cost_gain = 0.4
-        self.recovery_obstacle_cost_gain = 5.0 # Drastically increased to force obstacle avoidance
+        self.recovery_obstacle_cost_gain = 5.0 # increased to force obstacle avoidance
         self.recovery_speed_cost_gain = 1.0
 
         # Stuck Detection Parameters
@@ -64,7 +68,13 @@ class DWAPlanner(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.traj_marker_pub = self.create_publisher(MarkerArray, '/visualization_marker_array', 10)
         self.timer = self.create_timer(0.1, self.plan_and_execute)
-        
+
+        self.debug_plot_enabled = False
+        self.trajectories_array = []
+        self.best_trajectory_array = []
+        self.pose_array = []
+        self.initial_pose = None
+
         self.get_logger().info("DWA Planner Node Initialized Successfully.")
 
     def odom_callback(self, msg):
@@ -109,6 +119,7 @@ class DWAPlanner(Node):
 
         dist_to_goal = math.hypot(self.current_pose.position.x - self.goal_pose.position.x, self.current_pose.position.y - self.goal_pose.position.y)
         if dist_to_goal < 0.2:
+            self.debug_plot(trajectories=None, best_traj=None, plot_now=True)
             self.get_logger().info("Goal reached!")
             self.stop_robot()
             self.goal_pose = None
@@ -178,6 +189,10 @@ class DWAPlanner(Node):
                 self.get_logger().info(f"Costs - Heading: {heading_cost}, Path: {path_cost}, Dist: {dist_cost}, Speed: {speed_cost}")
 
         self.visualize_trajectories(trajectories, best_traj)
+
+        if self.debug_plot_enabled:
+            self.debug_plot(trajectories, best_traj, self.current_pose, self.goal_pose, self.initial_pose)
+
         return (best_traj[0], best_traj[1]) if best_traj else None
 
     def calculate_dynamic_window(self):
@@ -287,9 +302,38 @@ class DWAPlanner(Node):
 
         self.traj_marker_pub.publish(marker_array)
 
+    def debug_plot(self, trajectories, best_traj, plot_now = False):
+
+        if plot_now:
+            self.initial_pose = self.pose_array[0] if self.pose_array else None
+            x_array = [p.position.x for p in self.pose_array]
+            y_array = [p.position.y for p in self.pose_array]
+            plt.figure(figsize=(10, 10))
+            plt.plot(x_array, y_array, 'ro', label='Robot Path')
+            plt.plot(self.goal_pose.position.x, self.goal_pose.position.y, 'go', label='Goal')
+            plt.xlim(-5, 5)
+            plt.ylim(-5, 5)
+            plt.xlabel('X Position (m)')
+            plt.ylabel('Y Position (m)')
+            plt.title('Robot Path and Goal Position')
+            plt.legend()
+            plt.grid()
+            plt.show()
+            self.trajectories_array.clear()
+            self.best_trajectory_array.clear()  
+        else:
+            self.trajectories_array.append(trajectories)
+            self.best_trajectory_array.append(best_traj)
+            self.pose_array.append(self.current_pose)   
+        
 def main(args=None):
     rclpy.init(args=args)
     dwa_planner = DWAPlanner()
+    debug = False
+
+    if debug:
+        dwa_planner.debug_plot_enabled = True
+
     try:
         rclpy.spin(dwa_planner)
     except KeyboardInterrupt:
